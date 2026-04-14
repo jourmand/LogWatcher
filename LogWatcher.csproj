@@ -9,12 +9,18 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Elastic.Clients.Elasticsearch"       Version="8.15.0" />
+    <!-- Elasticsearch direct client (kept for checkpoint SQLite only) -->
+    <PackageReference Include="Elastic.Clients.Elasticsearch"        Version="8.15.0" />
+    <!-- Anthropic SDK — latest with IChatClient + MCP support -->
     <PackageReference Include="Anthropic.SDK" Version="5.10.0" />
-    <PackageReference Include="Microsoft.Extensions.Hosting"        Version="8.0.1"  />
-    <PackageReference Include="Microsoft.Extensions.Http"           Version="8.0.1"  />
+    <!-- Official MCP C# SDK — provides McpClient, StdioClientTransport -->
+    <PackageReference Include="ModelContextProtocol" Version="1.2.0" />
+    <!-- Microsoft.Extensions.AI abstractions needed by MCP SDK -->
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" Version="10.4.1" />
+    <PackageReference Include="Microsoft.Extensions.Hosting"         Version="8.0.1"  />
+    <PackageReference Include="Microsoft.Extensions.Http"            Version="8.0.1"  />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.1" />
-    <PackageReference Include="Microsoft.Data.Sqlite"               Version="8.0.8"  />
+    <PackageReference Include="Microsoft.Data.Sqlite"                Version="8.0.8"  />
     <PackageReference Include="Dapper" Version="2.1.72" />
   </ItemGroup>
 

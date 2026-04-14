@@ -200,19 +200,48 @@ public class ElasticsearchPoller
 
     private LogEntry MapToLogEntry(string id, JsonElement doc)
     {
-        // Supports dot-notation: "error.message", "kubernetes.pod.name"
+        // Supports dot-notation with arrays: "exceptions.0.StackTraceString"
         string GetString(string fieldPath)
         {
             var parts = fieldPath.Split('.');
             var current = doc;
             foreach (var part in parts)
             {
-                if (!current.TryGetProperty(part, out var next)) return string.Empty;
-                current = next;
+                if (current.ValueKind == JsonValueKind.Object)
+                {
+                    if (!current.TryGetProperty(part, out var next)) return string.Empty;
+                    current = next;
+                }
+                else if (current.ValueKind == JsonValueKind.Array && int.TryParse(part, out var index))
+                {
+                    if (index < 0 || index >= current.GetArrayLength()) return string.Empty;
+                    current = current[index];
+                }
+                else
+                {
+                    return string.Empty;
+                }
             }
+
             return current.ValueKind == JsonValueKind.String
                 ? current.GetString() ?? string.Empty
                 : current.ToString();
+        }
+
+        static string FirstNonEmpty(params string[] values) =>
+            values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? string.Empty;
+
+        string BuildExceptionFallback()
+        {
+            var type = GetString("exceptions.0.ClassName");
+            var message = GetString("exceptions.0.Message");
+            var stack = GetString("exceptions.0.StackTraceString");
+
+            if (string.IsNullOrWhiteSpace(type) && string.IsNullOrWhiteSpace(message) && string.IsNullOrWhiteSpace(stack))
+                return string.Empty;
+
+            return string.Join("\n", new[] { type, message, stack }
+                .Where(s => !string.IsNullOrWhiteSpace(s)));
         }
 
         DateTime GetTimestamp()
@@ -231,7 +260,19 @@ public class ElasticsearchPoller
 
         var fields = new Dictionary<string, object?>();
         foreach (var prop in doc.EnumerateObject())
-            fields[prop.Name] = prop.Value.ToString();
+            fields[prop.Name] = prop.Value.Clone();
+
+        var exception = FirstNonEmpty(
+            GetString(_cfg.ExceptionField),
+            GetString("exceptions.0.StackTraceString"),
+            GetString("exceptions.0.Message"),
+            BuildExceptionFallback());
+
+        var service = FirstNonEmpty(
+            GetString(_cfg.ServiceField),
+            GetString("service"),
+            GetString("fields.service"),
+            GetString("fields.Service"));
 
         return new LogEntry
         {
@@ -239,8 +280,8 @@ public class ElasticsearchPoller
             Timestamp     = GetTimestamp(),
             Level         = GetString(_cfg.LevelField),
             Message       = GetString(_cfg.MessageField),
-            Exception     = GetString(_cfg.ExceptionField),
-            Service       = GetString(_cfg.ServiceField),
+            Exception     = exception,
+            Service       = service,
             ContextFields = contextFields,
             Fields        = fields
         };

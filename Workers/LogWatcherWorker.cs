@@ -6,9 +6,9 @@ using Microsoft.Extensions.Options;
 namespace LogWatcher.Workers;
 
 /// <summary>
-/// Always-running background service:
-/// 1. Polls Elasticsearch for new error logs
-/// 2. Runs spike detection on the batch
+/// Always-running background service that:
+/// 1. Fetches new error logs — via MCP (if enabled) or direct ES client
+/// 2. Detects error spikes
 /// 3. Classifies errors with Claude AI
 /// 4. Deduplicates and rate-limits
 /// 5. Creates GitHub issues assigned to Copilot agent
@@ -16,29 +16,58 @@ namespace LogWatcher.Workers;
 /// </summary>
 public class LogWatcherWorker : BackgroundService
 {
-    private readonly ElasticsearchPoller _esPoller;
-    private readonly ErrorClassifier     _classifier;
-    private readonly DeduplicationStore  _dedup;
-    private readonly IServiceScopeFactory _scopeFactory;
-    private readonly WatcherSettings     _watcherSettings;
-    private readonly GitHubSettings      _githubSettings;
+    // One of these is active depending on Mcp:UseElasticsearchMcp
+    private readonly McpElasticsearchService? _mcpPoller;
+    private readonly ElasticsearchPoller?     _directPoller;
+
+    private readonly ErrorClassifier          _classifier;
+    private readonly DeduplicationStore       _dedup;
+    private readonly IServiceScopeFactory     _scopeFactory;
+    private readonly WatcherSettings          _watcherSettings;
+    private readonly GitHubSettings           _githubSettings;
     private readonly ILogger<LogWatcherWorker> _logger;
 
     public LogWatcherWorker(
-        ElasticsearchPoller esPoller,
+        IServiceScopeFactory scopeFactory,
         ErrorClassifier classifier,
         DeduplicationStore dedup,
-        IServiceScopeFactory scopeFactory,
         IOptions<AppSettings> options,
-        ILogger<LogWatcherWorker> logger)
+        ILogger<LogWatcherWorker> logger,
+        // Both are registered; only the active one is used
+        McpElasticsearchService mcpPoller,
+        ElasticsearchPoller directPoller)
     {
-        _esPoller        = esPoller;
+        _scopeFactory    = scopeFactory;
         _classifier      = classifier;
         _dedup           = dedup;
-        _scopeFactory    = scopeFactory;
         _watcherSettings = options.Value.Watcher;
         _githubSettings  = options.Value.GitHub;
         _logger          = logger;
+
+        var source = _watcherSettings.ElasticsearchSource?.Trim().ToLowerInvariant();
+        var useMcp = source switch
+        {
+            "mcp" => true,
+            "direct" => false,
+            "pulling" => false,
+            null or "" => options.Value.Mcp.UseElasticsearchMcp,
+            _ => options.Value.Mcp.UseElasticsearchMcp
+        };
+
+        if (source is not null && source is not "" and not "mcp" and not "direct" and not "pulling")
+        {
+            _logger.LogWarning(
+                "Unknown AppSettings:Watcher:ElasticsearchSource value '{Value}'. Falling back to AppSettings:Mcp:UseElasticsearchMcp={Fallback}",
+                _watcherSettings.ElasticsearchSource,
+                options.Value.Mcp.UseElasticsearchMcp);
+        }
+
+        _mcpPoller    = useMcp ? mcpPoller    : null;
+        _directPoller = useMcp ? null         : directPoller;
+
+        _logger.LogInformation(
+            "LogWatcher using {Mode} for Elasticsearch",
+            useMcp ? "MCP (Elastic MCP server)" : "direct Elasticsearch client");
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -72,35 +101,43 @@ public class LogWatcherWorker : BackgroundService
     {
         _logger.LogDebug("--- Starting poll cycle ---");
 
-        // 1. Fetch new error logs from Elasticsearch
-        var logs = await _esPoller.FetchNewErrorsAsync(ct);
+        // 1. Fetch logs — MCP path or direct path
+        List<LogEntry> logs;
+        List<SpikeEvent> spikes;
+
+        if (_mcpPoller != null)
+        {
+            logs   = await _mcpPoller.FetchNewErrorsAsync(ct);
+            spikes = _mcpPoller.DetectSpikes(logs);
+        }
+        else
+        {
+            logs   = await _directPoller!.FetchNewErrorsAsync(ct);
+            spikes = _directPoller.DetectSpikes(logs);
+        }
+
         if (logs.Count == 0)
         {
             _logger.LogDebug("No new error logs found");
             return;
         }
 
-        // 2. Spike detection
-        var spikes = _esPoller.DetectSpikes(logs);
         if (spikes.Count > 0)
             _logger.LogWarning("{Count} error spike(s) detected this cycle", spikes.Count);
 
-        // 3. AI classification
+        // 2. AI classification
         var classified = await _classifier.ClassifyAsync(logs, spikes, ct);
         _logger.LogInformation(
             "{Total} logs → {Actionable} actionable errors after AI classification",
             logs.Count, classified.Count);
 
-        // 4–6. Process each classified error in its own scope
+        // 3. Process each error
         foreach (var error in classified)
-        {
             await ProcessErrorAsync(error, ct);
-        }
     }
 
     private async Task ProcessErrorAsync(ClassifiedError error, CancellationToken ct)
     {
-        // Deduplicate
         if (_dedup.IsKnownError(error.ErrorFingerprint))
         {
             _logger.LogDebug("Skipping known error {Fingerprint}: {Title}",
@@ -108,11 +145,10 @@ public class LogWatcherWorker : BackgroundService
             return;
         }
 
-        // Rate limit guard
         if (!_dedup.IsWithinRateLimit(_githubSettings.MaxIssuesPerHour))
         {
             _logger.LogWarning(
-                "Rate limit reached ({Max}/hr) — skipping issue creation for: {Title}",
+                "Rate limit reached ({Max}/hr) — skipping: {Title}",
                 _githubSettings.MaxIssuesPerHour, error.Title);
             return;
         }
@@ -120,7 +156,6 @@ public class LogWatcherWorker : BackgroundService
         var spikeTag = error.IsSpike ? $" [SPIKE x{error.SpikeCount}]" : string.Empty;
         _logger.LogInformation("Creating GitHub issue{Spike}: {Title}", spikeTag, error.Title);
 
-        // Use a scope so Scoped services (GitHubService, NotificationService) are safe
         using var scope   = _scopeFactory.CreateScope();
         var github        = scope.ServiceProvider.GetRequiredService<GitHubService>();
         var notifications = scope.ServiceProvider.GetRequiredService<NotificationService>();

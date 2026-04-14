@@ -22,26 +22,22 @@ builder.Services.AddHttpClient("github", (sp, client) =>
 
     client.BaseAddress = new Uri("https://api.github.com");
     client.DefaultRequestHeaders.UserAgent.ParseAdd("LogWatcher/1.0");
-    client.DefaultRequestHeaders.Accept
-          .ParseAdd("application/vnd.github+json");
+    client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
     client.DefaultRequestHeaders.Authorization =
         new AuthenticationHeaderValue("Bearer", cfg.PersonalAccessToken);
     client.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
     client.Timeout = TimeSpan.FromSeconds(30);
 });
 
-// Default unnamed client (used by NotificationService for Slack)
-builder.Services.AddHttpClient();
+builder.Services.AddHttpClient(); // default unnamed client (Slack)
 
 // ── Singleton services ────────────────────────────────────────────────────────
-// These hold state (DB connection, ES client, checkpoint) so must be Singleton
 builder.Services.AddSingleton<DeduplicationStore>();
-builder.Services.AddSingleton<ElasticsearchPoller>();
+builder.Services.AddSingleton<ElasticsearchPoller>();    // direct ES client
+builder.Services.AddSingleton<McpElasticsearchService>(); // MCP ES client
 builder.Services.AddSingleton<ErrorClassifier>();
 
 // ── Scoped services ───────────────────────────────────────────────────────────
-// GitHubService and NotificationService are stateless — Scoped is fine.
-// Workers resolve them via IServiceScopeFactory (injected automatically by host).
 builder.Services.AddScoped<GitHubService>();
 builder.Services.AddScoped<NotificationService>();
 
@@ -51,9 +47,10 @@ builder.Services.AddHostedService<PrPollerWorker>();
 
 // ── Logging ───────────────────────────────────────────────────────────────────
 builder.Logging.ClearProviders();
-builder.Logging.AddConsole(opts =>
+builder.Logging.AddSimpleConsole(opts =>
 {
     opts.TimestampFormat = "HH:mm:ss ";
+    opts.SingleLine = true;
 });
 
 var host = builder.Build();

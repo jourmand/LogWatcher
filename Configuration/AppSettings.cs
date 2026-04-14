@@ -8,6 +8,31 @@ public class AppSettings
     public WatcherSettings Watcher { get; set; } = new();
     public NotificationSettings Notifications { get; set; } = new();
     public ClassifierSettings Classifier { get; set; } = new();
+
+    // NEW: controls whether to use MCP transport or direct ES client
+    public McpSettings Mcp { get; set; } = new();
+}
+
+public class McpSettings
+{
+    /// <summary>
+    /// true  = use Elasticsearch MCP server (npx @elastic/mcp-server-elasticsearch)
+    /// false = use direct Elastic.Clients.Elasticsearch (original behaviour)
+    /// </summary>
+    public bool UseElasticsearchMcp { get; set; } = false;
+
+    /// <summary>
+    /// How the MCP server process is launched.
+    /// "npx"    → npx -y @elastic/mcp-server-elasticsearch  (requires Node.js)
+    /// "docker" → docker run … docker.elastic.co/mcp/elasticsearch stdio
+    /// </summary>
+    public string Transport { get; set; } = "npx";   // "npx" | "docker"
+
+    /// <summary>ES_API_KEY passed to the MCP server process.</summary>
+    public string EsApiKey { get; set; } = "";
+
+    /// <summary>Timeout in seconds for a single MCP search call.</summary>
+    public int TimeoutSeconds { get; set; } = 30;
 }
 
 public class ElasticsearchSettings
@@ -15,50 +40,25 @@ public class ElasticsearchSettings
     public string Url { get; set; } = "http://localhost:9200";
     public string Username { get; set; } = "";
     public string Password { get; set; } = "";
-    public string ApiKey { get; set; } = "";          // alternative to basic auth
-
+    public string ApiKey { get; set; } = "";
     public string IndexPattern { get; set; } = "demoapp-logs-*";
-
-    // ── Field name mapping ────────────────────────────────────────────────────
-    // Adjust these to match your actual ES document schema
     public string LevelField { get; set; } = "level";
     public string MessageField { get; set; } = "message";
     public string ExceptionField { get; set; } = "exception";
     public string ServiceField { get; set; } = "service";
     public string TimestampField { get; set; } = "@timestamp";
-    // Optional extra context fields to include in the GitHub issue body
     public List<string> ExtraContextFields { get; set; } = ["TraceId", "RequestPath", "UserId", "Environment"];
-
-    // ── Scope filters ─────────────────────────────────────────────────────────
-    // Only watch logs from these services (empty = watch all)
     public List<string> IncludeServices { get; set; } = [];
-    // Never create issues for logs from these services
     public List<string> ExcludeServices { get; set; } = [];
-    // Only watch these log levels (default covers the standard error levels)
     public List<string> ErrorLevels { get; set; } = ["error", "critical", "fatal", "ERROR", "CRITICAL", "FATAL"];
-
-    // ── Message filters ───────────────────────────────────────────────────────
-    // Substring patterns — logs matching ANY of these are silently ignored
-    // Useful for known noisy errors you don't want issues for
     public List<string> ExcludeMessagePatterns { get; set; } =
         ["health check", "heartbeat", "Connection reset by peer"];
-    // Regex patterns applied to the message field (case-insensitive)
     public List<string> ExcludeMessageRegex { get; set; } = [];
-
-    // ── Spike detection ───────────────────────────────────────────────────────
-    // Detect sudden bursts: if the same error appears >= threshold times
-    // within the spike window, treat it as a spike regardless of dedup
     public bool EnableSpikeDetection { get; set; } = true;
-    public int SpikeThreshold { get; set; } = 10;            // occurrences
-    public int SpikeWindowMinutes { get; set; } = 5;         // within this window
-
-    // ── Query tuning ──────────────────────────────────────────────────────────
-    // Max log entries fetched per poll cycle
+    public int SpikeThreshold { get; set; } = 10;
+    public int SpikeWindowMinutes { get; set; } = 5;
     public int MaxResultsPerPoll { get; set; } = 200;
-    // Use ES scroll API for large result sets (> 500 logs expected per cycle)
     public bool UseScrollApi { get; set; } = false;
-    // Additional raw Lucene filter query applied to every search (advanced)
-    // Example: "environment:production AND NOT kubernetes.namespace:staging"
     public string? AdditionalQueryFilter { get; set; }
 }
 
@@ -79,35 +79,25 @@ public class WatcherSettings
 {
     public int PollIntervalSeconds { get; set; } = 60;
     public int PrPollIntervalSeconds { get; set; } = 30;
+    // Allowed values: "mcp" or "direct" (aka "pulling").
+    // When empty, falls back to Mcp.UseElasticsearchMcp.
+    public string ElasticsearchSource { get; set; } = "direct";
     public string MinSeverity { get; set; } = "error";
     public int DeduplicationWindowHours { get; set; } = 24;
 }
 
 public class ClassifierSettings
 {
-    // Your tech stack — helps Claude give better root cause analysis
-    // e.g. ["ASP.NET Core 8", "Entity Framework Core", "RabbitMQ", "Redis"]
     public List<string> TechStack { get; set; } = [];
-
-    // Hint Claude about common patterns in YOUR codebase
-    // e.g. "Our services use Result<T> pattern, never throw for business errors"
     public string? CodebaseContext { get; set; }
-
-    // Labels to apply per severity on GitHub issues
     public Dictionary<string, List<string>> SeverityLabels { get; set; } = new()
     {
         ["critical"] = ["bug", "critical", "auto-detected"],
         ["error"]    = ["bug", "auto-detected"],
         ["warning"]  = ["enhancement", "auto-detected"]
     };
-
-    // If true, Claude will try to suggest which file/class is likely responsible
     public bool EnableRootCauseHints { get; set; } = true;
-
-    // If true, group similar errors into one issue instead of separate ones
     public bool GroupSimilarErrors { get; set; } = true;
-
-    // Minimum confidence score (0-100) Claude must report to create an issue
     public int MinConfidenceScore { get; set; } = 60;
 }
 

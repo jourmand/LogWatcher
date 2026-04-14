@@ -1,5 +1,5 @@
-using Anthropic.SDK;
 using Anthropic.SDK.Constants;
+using Anthropic.SDK;
 using Anthropic.SDK.Messaging;
 using LogWatcher.Configuration;
 using LogWatcher.Models;
@@ -134,6 +134,11 @@ public class ErrorClassifier
             level     = l.Level,
             message   = l.Message,
             exception = Truncate(l.Exception, 1000),
+            stackTrace = Truncate(GetFieldValue(l, "exceptions.0.StackTraceString"), 2000),
+            exceptionType = GetFieldValue(l, "exceptions.0.ClassName"),
+            sourceContext = GetFieldValue(l, "fields.SourceContext"),
+            messageTemplate = GetFieldValue(l, "messageTemplate"),
+            requestPath = GetFieldValue(l, "fields.RequestPath"),
             context   = l.ContextFields.Count > 0 ? l.ContextFields : null
         }).ToList();
 
@@ -253,6 +258,42 @@ public class ErrorClassifier
 
     private static string? Truncate(string? s, int max) =>
         s is null ? null : s.Length > max ? s[..max] + "..." : s;
+
+    private static string? GetFieldValue(LogEntry log, string path)
+    {
+        if (log.Fields.Count == 0) return null;
+
+        var parts = path.Split('.');
+        if (!log.Fields.TryGetValue(parts[0], out var root) || root is not JsonElement current)
+            return null;
+
+        for (var i = 1; i < parts.Length; i++)
+        {
+            var part = parts[i];
+
+            if (current.ValueKind == JsonValueKind.Object)
+            {
+                if (!current.TryGetProperty(part, out var next)) return null;
+                current = next;
+            }
+            else if (current.ValueKind == JsonValueKind.Array && int.TryParse(part, out var index))
+            {
+                if (index < 0 || index >= current.GetArrayLength()) return null;
+                current = current[index];
+            }
+            else
+            {
+                return null;
+            }
+        }
+
+        return current.ValueKind switch
+        {
+            JsonValueKind.String => current.GetString(),
+            JsonValueKind.Null or JsonValueKind.Undefined => null,
+            _ => current.ToString()
+        };
+    }
 
     // ── Response DTO ──────────────────────────────────────────────────────────
 
