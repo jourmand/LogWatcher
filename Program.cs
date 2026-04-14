@@ -29,6 +29,32 @@ builder.Services.AddHttpClient("github", (sp, client) =>
     client.Timeout = TimeSpan.FromSeconds(30);
 });
 
+builder.Services.AddHttpClient("freshservice", (sp, client) =>
+{
+    var cfg = sp.GetRequiredService<IConfiguration>()
+        .GetSection("AppSettings:FreshService")
+        .Get<FreshServiceSettings>();
+
+    if (cfg == null)
+        throw new InvalidOperationException(
+            "AppSettings:FreshService section is missing from configuration.");
+
+    if (!string.IsNullOrWhiteSpace(cfg.BaseUrl))
+        client.BaseAddress = new Uri(cfg.BaseUrl.TrimEnd('/') + "/");
+
+    client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("LogWatcher/1.0");
+
+    if (!string.IsNullOrWhiteSpace(cfg.ApiKey))
+    {
+        var basic = Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes($"{cfg.ApiKey}:X"));
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Basic", basic);
+    }
+
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+
 builder.Services.AddHttpClient(); // default unnamed client (Slack)
 
 // ── Singleton services ────────────────────────────────────────────────────────
@@ -36,14 +62,16 @@ builder.Services.AddSingleton<DeduplicationStore>();
 builder.Services.AddSingleton<ElasticsearchPoller>();    // direct ES client
 builder.Services.AddSingleton<McpElasticsearchService>(); // MCP ES client
 builder.Services.AddSingleton<ErrorClassifier>();
+builder.Services.AddSingleton<FreshServiceService>();
 
 // ── Scoped services ───────────────────────────────────────────────────────────
 builder.Services.AddScoped<GitHubService>();
 builder.Services.AddScoped<NotificationService>();
 
 // ── Background workers ────────────────────────────────────────────────────────
-builder.Services.AddHostedService<LogWatcherWorker>();
-builder.Services.AddHostedService<PrPollerWorker>();
+// builder.Services.AddHostedService<LogWatcherWorker>();
+// builder.Services.AddHostedService<PrPollerWorker>();
+builder.Services.AddHostedService<FreshServiceWorker>();
 
 // ── Logging ───────────────────────────────────────────────────────────────────
 builder.Logging.ClearProviders();

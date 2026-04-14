@@ -4,6 +4,7 @@ public class AppSettings
 {
     public ElasticsearchSettings Elasticsearch { get; set; } = new();
     public GitHubSettings GitHub { get; set; } = new();
+    public FreshServiceSettings FreshService { get; set; } = new();
     public AnthropicSettings Anthropic { get; set; } = new();
     public WatcherSettings Watcher { get; set; } = new();
     public NotificationSettings Notifications { get; set; } = new();
@@ -11,6 +12,19 @@ public class AppSettings
 
     // NEW: controls whether to use MCP transport or direct ES client
     public McpSettings Mcp { get; set; } = new();
+}
+
+public class FreshServiceSettings
+{
+    public bool Enabled { get; set; } = false;
+    public string BaseUrl { get; set; } = "";
+    public string ApiKey { get; set; } = "";
+    public int PollIntervalSeconds { get; set; } = 120;
+    public int RecentClosedLookbackDays { get; set; } = 30;
+    public int InitialNewTicketLookbackMinutes { get; set; } = 30;
+    public int MaxPages { get; set; } = 4;
+    public int PerPage { get; set; } = 50;
+    public double SimilarityThreshold { get; set; } = 0.35;
 }
 
 public class McpSettings
