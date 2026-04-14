@@ -10,12 +10,12 @@
 
   <ItemGroup>
     <PackageReference Include="Elastic.Clients.Elasticsearch"       Version="8.15.0" />
-    <PackageReference Include="Anthropic.SDK"                       Version="3.7.4"  />
+    <PackageReference Include="Anthropic.SDK" Version="5.10.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting"        Version="8.0.1"  />
     <PackageReference Include="Microsoft.Extensions.Http"           Version="8.0.1"  />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.1" />
     <PackageReference Include="Microsoft.Data.Sqlite"               Version="8.0.8"  />
-    <PackageReference Include="Dapper"                              Version="2.1.35" />
+    <PackageReference Include="Dapper" Version="2.1.72" />
   </ItemGroup>
 
 </Project>

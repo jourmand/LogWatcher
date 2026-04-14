@@ -17,7 +17,7 @@ public class ElasticsearchSettings
     public string Password { get; set; } = "";
     public string ApiKey { get; set; } = "";          // alternative to basic auth
 
-    public string IndexPattern { get; set; } = "logs-*";
+    public string IndexPattern { get; set; } = "demoapp-logs-*";
 
     // ── Field name mapping ────────────────────────────────────────────────────
     // Adjust these to match your actual ES document schema

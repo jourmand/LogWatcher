@@ -1,4 +1,4 @@
-# LogWatcher — Autonomous Bug-Fixing Pipeline (.NET 8)
+# LogWatcher — Autonomous Bug-Fixing Pipeline
 
 Reads your Elasticsearch application logs, uses Claude AI to classify errors,
 creates GitHub Issues, and assigns them to GitHub Copilot coding agent to
@@ -51,7 +51,7 @@ Edit `appsettings.json` or set environment variables:
 | Setting | Env var | Description |
 |---------|---------|-------------|
 | `Elasticsearch:Url` | `AppSettings__Elasticsearch__Url` | ES endpoint |
-| `Elasticsearch:IndexPattern` | `AppSettings__Elasticsearch__IndexPattern` | e.g. `logs-*` |
+| `Elasticsearch:IndexPattern` | `AppSettings__Elasticsearch__IndexPattern` | e.g. `demoapp-logs-*` |
 | `Elasticsearch:LevelField` | `AppSettings__Elasticsearch__LevelField` | Field name for log level |
 | `GitHub:PersonalAccessToken` | `AppSettings__GitHub__PersonalAccessToken` | Your PAT |
 | `GitHub:Owner` | `AppSettings__GitHub__Owner` | GitHub username/org |

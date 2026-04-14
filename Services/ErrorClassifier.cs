@@ -174,7 +174,7 @@ public class ErrorClassifier
         {
             var request = new MessageParameters
             {
-                Model = AnthropicModels.Claude3Haiku,
+                Model = AnthropicModels.Claude45Sonnet,
                 MaxTokens = 4096,
                 Messages = [new Message(RoleType.User, promptText)]
             };
