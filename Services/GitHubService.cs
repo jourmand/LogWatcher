@@ -99,7 +99,7 @@ public class GitHubService
             body,
             labels    = error.SuggestedLabels.Count > 0
                 ? error.SuggestedLabels
-                : new List<string> { "bug", "auto-detected" },
+                : ["bug", "auto-detected"],
             assignees = new[] { "copilot-swe-agent[bot]" }
         };
 
@@ -147,7 +147,7 @@ public class GitHubService
         {
             var json = await _http.GetStringAsync(url, ct);
             var prs  = JsonSerializer.Deserialize<List<GitHubPrResponse>>(json, JsonOpts)
-                       ?? new List<GitHubPrResponse>();
+                       ?? [];
 
             return prs.FirstOrDefault(pr =>
                 pr.Head.Ref.StartsWith("copilot/", StringComparison.OrdinalIgnoreCase));

@@ -1,4 +1,5 @@
 using Anthropic.SDK;
+using Anthropic.SDK.Constants;
 using Anthropic.SDK.Messaging;
 using LogWatcher.Configuration;
 using LogWatcher.Models;
@@ -6,6 +7,7 @@ using Microsoft.Extensions.Options;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace LogWatcher.Services;
@@ -24,7 +26,7 @@ public class ErrorClassifier
     private readonly ILogger<ErrorClassifier> _logger;
 
     private static readonly string[] RootCauseCategories =
-    {
+    [
         "NullReferenceException", "ArgumentException", "InvalidOperationException",
         "DatabaseTimeout", "DatabaseConnectionFailed", "UniqueConstraintViolation",
         "DeadlockDetected", "HttpClientTimeout", "HttpClientBadResponse",
@@ -32,22 +34,22 @@ public class ErrorClassifier
         "QueueConnectionFailed", "CacheConnectionFailed", "FileIOError",
         "ConfigurationMissing", "UnhandledEdgeCase", "ConcurrencyConflict",
         "MemoryPressure", "InfrastructureFailure", "Unknown"
-    };
+    ];
 
     // Compiled regexes for message normalisation
-    private static readonly Regex _guidRegex = new(
+    private static readonly Regex GuidRegex = new(
         @"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
         RegexOptions.Compiled);
 
-    private static readonly Regex _numericIdRegex = new(
+    private static readonly Regex NumericIdRegex = new(
         @"([=#])\d+",
         RegexOptions.Compiled);
 
-    private static readonly Regex _ipRegex = new(
+    private static readonly Regex IpRegex = new(
         @"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b",
         RegexOptions.Compiled);
 
-    private static readonly Regex _fenceRegex = new(
+    private static readonly Regex FenceRegex = new(
         @"```[\w]*\n?|```",
         RegexOptions.Compiled);
 
@@ -63,14 +65,14 @@ public class ErrorClassifier
     public async Task<List<ClassifiedError>> ClassifyAsync(
         List<LogEntry> logs, List<SpikeEvent> spikes, CancellationToken ct)
     {
-        if (logs.Count == 0) return new List<ClassifiedError>();
+        if (logs.Count == 0) return [];
 
         var spikeMap = spikes.ToDictionary(s => s.Fingerprint);
 
         if (_cfg.GroupSimilarErrors)
         {
             var groups = logs
-                .GroupBy(l => ComputeFingerprint(l))
+                .GroupBy(ComputeFingerprint)
                 .ToList();
 
             var representatives = groups
@@ -88,7 +90,7 @@ public class ErrorClassifier
                 var fp = ComputeFingerprint(r.OriginalLog);
                 var grp = groups.FirstOrDefault(g => g.Key == fp);
 
-                r.GroupedLogs = grp?.ToList() ?? new List<LogEntry>();
+                r.GroupedLogs = grp?.ToList() ?? [];
                 r.ErrorFingerprint = fp;
 
                 if (spikeMap.TryGetValue(fp, out var spike))
@@ -174,10 +176,7 @@ public class ErrorClassifier
             {
                 Model = AnthropicModels.Claude3Haiku,
                 MaxTokens = 4096,
-                Messages = new List<Message>
-                {
-                    new Message(RoleType.User, promptText)
-                }
+                Messages = [new Message(RoleType.User, promptText)]
             };
 
             var response = await _anthropic.Messages.GetClaudeMessageAsync(request, ct);
@@ -187,12 +186,12 @@ public class ErrorClassifier
                 .FirstOrDefault()?.Text ?? "[]";
 
             // Strip accidental markdown fences
-            var json = _fenceRegex.Replace(rawText.Trim(), "").Trim();
+            var json = FenceRegex.Replace(rawText.Trim(), "").Trim();
 
             var results = JsonSerializer.Deserialize<List<ClaudeResult>>(json,
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
 
-            if (results == null) return new List<ClassifiedError>();
+            if (results == null) return [];
 
             return results
                 .Where(r => r.IsFixableByCode && r.Confidence >= _cfg.MinConfidenceScore
@@ -202,7 +201,7 @@ public class ErrorClassifier
                     var log = logs[r.Index];
                     var labels = _cfg.SeverityLabels.TryGetValue(r.Severity, out var l)
                         ? l
-                        : new List<string> { "bug", "auto-detected" };
+                        : ["bug", "auto-detected"];
 
                     return new ClassifiedError
                     {
@@ -214,7 +213,7 @@ public class ErrorClassifier
                         Summary           = r.Summary,
                         RootCauseCategory = r.RootCauseCategory,
                         SuggestedArea     = r.SuggestedArea,
-                        ReproductionHints = r.ReproductionHints ?? new List<string>(),
+                        ReproductionHints = r.ReproductionHints ?? [],
                         SuggestedLabels   = labels,
                         ErrorFingerprint  = ComputeFingerprint(log)
                     };
@@ -224,7 +223,7 @@ public class ErrorClassifier
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error calling Claude classification API");
-            return new List<ClassifiedError>();
+            return [];
         }
     }
 
@@ -246,9 +245,9 @@ public class ErrorClassifier
 
     private static string NormaliseMessage(string msg)
     {
-        msg = _guidRegex.Replace(msg, "{guid}");
-        msg = _numericIdRegex.Replace(msg, "$1{n}");
-        msg = _ipRegex.Replace(msg, "{ip}");
+        msg = GuidRegex.Replace(msg, "{guid}");
+        msg = NumericIdRegex.Replace(msg, "$1{n}");
+        msg = IpRegex.Replace(msg, "{ip}");
         return msg;
     }
 
@@ -261,6 +260,7 @@ public class ErrorClassifier
     {
         public int Index { get; set; }
         public string Severity { get; set; } = "error";
+        [JsonPropertyName("is_fixable_by_code")]
         public bool IsFixableByCode { get; set; }
         public int Confidence { get; set; }
         public string RootCauseCategory { get; set; } = "Unknown";

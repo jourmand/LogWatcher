@@ -50,7 +50,7 @@ public class ElasticsearchPoller
         _logger.LogDebug("ES poll window: {From:O} to {To:O}", from, to);
 
         var raw = await QueryElasticsearchAsync(from, to, ct);
-        if (raw.Count == 0) return new List<LogEntry>();
+        if (raw.Count == 0) return [];
 
         SaveCheckpoint(to);
 
@@ -66,10 +66,10 @@ public class ElasticsearchPoller
     public List<SpikeEvent> DetectSpikes(List<LogEntry> batch)
     {
         if (!_cfg.EnableSpikeDetection || batch.Count == 0)
-            return new List<SpikeEvent>();
+            return [];
 
         var spikes = batch
-            .GroupBy(l => ErrorClassifier.ComputeFingerprint(l))
+            .GroupBy(ErrorClassifier.ComputeFingerprint)
             .Where(g => g.Count() >= _cfg.SpikeThreshold)
             .Select(g => new SpikeEvent
             {
@@ -94,91 +94,77 @@ public class ElasticsearchPoller
     {
         try
         {
-            // Build the source fields list up front
-            var sourceFields = new List<string>
-            {
-                _cfg.LevelField, _cfg.MessageField, _cfg.ExceptionField,
-                _cfg.ServiceField, _cfg.TimestampField
-            };
-            sourceFields.AddRange(_cfg.ExtraContextFields);
-            var fieldObjects = sourceFields
-                .Distinct()
-                .Select(f => new Field(f))
-                .ToArray();
+            var luceneQuery = BuildLuceneQuery(from, to);
 
             var response = await _client.SearchAsync<JsonElement>(s =>
             {
                 s.Indices(_cfg.IndexPattern)
                  .Size(_cfg.MaxResultsPerPoll)
-                 .Sort(so => so.Field(_cfg.TimestampField, f => f.Order(SortOrder.Asc)))
-                 .Source(src => src.Filter(sf => sf.Includes(inc => inc.Fields(fieldObjects))));
-
-                s.Query(q => q.Bool(b =>
-                {
-                    // ── Filter clauses (must match all) ───────────────────────
-                    var filterClauses = new List<Action<QueryDescriptor<JsonElement>>>();
-
-                    // Time range
-                    filterClauses.Add(f => f.Range(r => r.DateRange(dr => dr
-                        .Field(_cfg.TimestampField)
-                        .Gte(from.ToString("O"))
-                        .Lt(to.ToString("O")))));
-
-                    // Error levels
-                    filterClauses.Add(f => f.Terms(t => t
-                        .Field(_cfg.LevelField)
-                        .Terms(new TermsQueryField(
-                            _cfg.ErrorLevels.Select(FieldValue.String).ToArray()))));
-
-                    // Include services (optional)
-                    if (_cfg.IncludeServices.Count > 0)
-                    {
-                        filterClauses.Add(f => f.Terms(t => t
-                            .Field(_cfg.ServiceField)
-                            .Terms(new TermsQueryField(
-                                _cfg.IncludeServices.Select(FieldValue.String).ToArray()))));
-                    }
-
-                    // Raw Lucene filter (optional)
-                    if (!string.IsNullOrWhiteSpace(_cfg.AdditionalQueryFilter))
-                    {
-                        filterClauses.Add(f => f.QueryString(qs =>
-                            qs.Query(_cfg.AdditionalQueryFilter)));
-                    }
-
-                    b.Filter(filterClauses.ToArray());
-
-                    // ── MustNot clauses ───────────────────────────────────────
-                    if (_cfg.ExcludeServices.Count > 0)
-                    {
-                        b.MustNot(mn => mn.Terms(t => t
-                            .Field(_cfg.ServiceField)
-                            .Terms(new TermsQueryField(
-                                _cfg.ExcludeServices.Select(FieldValue.String).ToArray()))));
-                    }
-                }));
-
-                return s;
+                 .Sort(so => so.Field(new Field(_cfg.TimestampField), f => f.Order(SortOrder.Asc)))
+                 .Query(q => q.QueryString(qs => qs.Query(luceneQuery)));
             }, ct);
 
             if (!response.IsValidResponse)
             {
                 _logger.LogWarning("ES query returned invalid response: {Reason}",
                     response.ElasticsearchServerError?.Error?.Reason);
-                return new List<LogEntry>();
+                return [];
             }
 
             return response.Hits
-                .Where(h => h.Source.HasValue)
-                .Select(h => MapToLogEntry(h.Id ?? string.Empty, h.Source!.Value))
+                .Where(h => h.Source.ValueKind is not JsonValueKind.Undefined and not JsonValueKind.Null)
+                .Select(h => MapToLogEntry(h.Id ?? string.Empty, h.Source))
                 .ToList();
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Exception querying Elasticsearch");
-            return new List<LogEntry>();
+            return [];
         }
     }
+
+    private string BuildLuceneQuery(DateTime from, DateTime to)
+    {
+        var clauses = new List<string>
+        {
+            $"{_cfg.TimestampField}:[{QuoteForLucene(from.ToString("O"))} TO {QuoteForLucene(to.ToString("O"))}]"
+        };
+
+        var levels = _cfg.ErrorLevels
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => QuoteForLucene(v.Trim()))
+            .Distinct()
+            .ToList();
+
+        if (levels.Count > 0)
+            clauses.Add($"{_cfg.LevelField}:({string.Join(" OR ", levels)})");
+
+        var includeServices = _cfg.IncludeServices
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => QuoteForLucene(v.Trim()))
+            .Distinct()
+            .ToList();
+
+        if (includeServices.Count > 0)
+            clauses.Add($"{_cfg.ServiceField}:({string.Join(" OR ", includeServices)})");
+
+        if (!string.IsNullOrWhiteSpace(_cfg.AdditionalQueryFilter))
+            clauses.Add($"({_cfg.AdditionalQueryFilter})");
+
+        var excludeServices = _cfg.ExcludeServices
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => QuoteForLucene(v.Trim()))
+            .Distinct()
+            .ToList();
+
+        if (excludeServices.Count > 0)
+            clauses.Add($"NOT {_cfg.ServiceField}:({string.Join(" OR ", excludeServices)})");
+
+        return string.Join(" AND ", clauses);
+    }
+
+    private static string QuoteForLucene(string value) =>
+        $"\"{value.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"";
 
     // ── Client-side filters ───────────────────────────────────────────────────
 

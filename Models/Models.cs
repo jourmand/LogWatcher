@@ -22,11 +22,11 @@ public class ClassifiedError
     public string Summary { get; set; } = "";
     public string? RootCauseCategory { get; set; }
     public string? SuggestedArea { get; set; }
-    public List<string> ReproductionHints { get; set; } = new();
-    public List<string> SuggestedLabels { get; set; } = new();
+    public List<string> ReproductionHints { get; set; } = [];
+    public List<string> SuggestedLabels { get; set; } = [];
     public bool IsSpike { get; set; }
     public int SpikeCount { get; set; }
-    public List<LogEntry> GroupedLogs { get; set; } = new();
+    public List<LogEntry> GroupedLogs { get; set; } = [];
     public string ErrorFingerprint { get; set; } = "";
 }
 
