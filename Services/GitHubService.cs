@@ -41,6 +41,7 @@ public class GitHubService
         ClassifiedError error, CancellationToken ct)
     {
         var log = error.OriginalLog;
+        var labels = await ResolveValidLabelsAsync(error.SuggestedLabels, ct);
 
         // Context fields table
         var contextTable = BuildContextTable(log);
@@ -97,9 +98,7 @@ public class GitHubService
         {
             title = $"[{error.Severity.ToUpperInvariant()}] {error.Title}",
             body,
-            labels    = error.SuggestedLabels.Count > 0
-                ? error.SuggestedLabels
-                : ["bug", "auto-detected"],
+            labels    = labels.Count > 0 ? labels : null,
             assignees = new[] { "copilot-swe-agent[bot]" }
         };
 
@@ -177,6 +176,52 @@ public class GitHubService
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    private async Task<List<string>> ResolveValidLabelsAsync(
+        IReadOnlyCollection<string> suggestedLabels,
+        CancellationToken ct)
+    {
+        var desired = (suggestedLabels.Count > 0 ? suggestedLabels : ["bug", "auto-detected"])
+            .Where(l => !string.IsNullOrWhiteSpace(l))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        try
+        {
+            var existing = await GetExistingLabelNamesAsync(ct);
+            var valid = desired
+                .Where(existing.Contains)
+                .ToList();
+
+            if (valid.Count != desired.Count)
+            {
+                var removed = desired.Except(valid, StringComparer.OrdinalIgnoreCase).ToList();
+                _logger.LogWarning(
+                    "Skipping non-existent GitHub labels: {Labels}",
+                    string.Join(", ", removed));
+            }
+
+            return valid;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Unable to validate GitHub labels. Issue will be created without labels.");
+            return [];
+        }
+    }
+
+    private async Task<HashSet<string>> GetExistingLabelNamesAsync(CancellationToken ct)
+    {
+        var url = $"https://api.github.com/repos/{_settings.Owner}/{_settings.Repo}/labels?per_page=100";
+        var json = await _http.GetStringAsync(url, ct);
+        var labels = JsonSerializer.Deserialize<List<GitHubLabel>>(json, JsonOpts) ?? [];
+
+        return labels
+            .Where(l => !string.IsNullOrWhiteSpace(l.Name))
+            .Select(l => l.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
     private static string BuildContextTable(LogEntry log)
     {
         if (log.ContextFields.Count == 0) return string.Empty;
@@ -188,5 +233,10 @@ public class GitHubService
                "| Field | Value |\n" +
                "|-------|-------|\n" +
                string.Join("\n", rows);
+    }
+
+    private sealed class GitHubLabel
+    {
+        public string Name { get; set; } = string.Empty;
     }
 }
